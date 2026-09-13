@@ -1,0 +1,14 @@
+name: iOS validation
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test budget and response contracts
+        run: swift test
+      - name: Build iPhone simulator app
+        run: xcodebuild -project FitFind.xcodeproj -scheme FitFind -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
