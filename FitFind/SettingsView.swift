@@ -29,14 +29,18 @@ struct SettingsView: View {
                         HStack { Label("Test connection", systemImage: "network"); if checking { Spacer(); ProgressView() } }
                     }.disabled(checking)
                     if let message = message { Text(message).font(.footnote) }
-                }
+                }.listRowBackground(FitStyle.surface)
                 Section("Photo privacy") {
                     Text("Photos are sent to your recognition server and Google Gemini only when you request analysis. Saved looks stay on this device and contain descriptions, not photos.")
                         .font(.footnote)
                     Link("Google Gemini data terms", destination: URL(string: "https://ai.google.dev/gemini-api/terms")!)
-                }
+                }.listRowBackground(FitStyle.surface)
             }
+            .scrollContentBackground(.hidden)
+            .background(FitStyle.background)
             .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(FitStyle.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -51,5 +55,8 @@ struct SettingsView: View {
             }
             .onAppear { draftEndpoint = endpoint; token = TokenStore.read() }
         }
+        .foregroundStyle(FitStyle.ink)
+        .tint(FitStyle.accent)
+        .preferredColorScheme(.dark)
     }
 }

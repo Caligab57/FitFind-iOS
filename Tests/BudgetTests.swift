@@ -34,4 +34,46 @@ final class BudgetTests: XCTestCase {
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
         XCTAssertEqual(query, "shirt & pants # sale under $50")
     }
+
+    func testNoLimitSearchPreservesQueryWithoutAddingPrice() throws {
+        let garment = Garment(id: "a", category: .top, name: "Shirt", color: "Black",
+            details: "Boxy cut", searchQuery: "black boxy shirt & layered tee # outfit")
+        let url = try XCTUnwrap(garment.shoppingURL(budgetCents: nil))
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(items.first { $0.name == "q" }?.value, garment.searchQuery)
+        XCTAssertEqual(items.first { $0.name == "tbm" }?.value, "shop")
+    }
+
+    func testNoLimitDoesNotFallBackToCustomBudget() {
+        for custom in ["250", "", "invalid", "10001"] {
+            XCTAssertNil(BudgetTier.unlimited.resolvedCents(customDollars: custom))
+            XCTAssertTrue(BudgetTier.unlimited.isValid(customDollars: custom))
+            XCTAssertEqual(BudgetTier.balanced.resolvedCents(customDollars: custom), 25000)
+        }
+        XCTAssertFalse(BudgetTier.custom.isValid(customDollars: ""))
+        XCTAssertFalse(BudgetTier.custom.isValid(customDollars: "10001"))
+        XCTAssertTrue(BudgetTier.custom.isValid(customDollars: "250"))
+        XCTAssertEqual(BudgetTier.custom.resolvedCents(customDollars: "250"), 25000)
+    }
+
+    func testLegacySavedBudgetDecodes() throws {
+        let data = Data("""
+        {"id":"00000000-0000-0000-0000-000000000001","createdAt":0,
+         "analysis":{"summary":"Saved look","garments":[],"limitations":""},"budgetCents":25000}
+        """.utf8)
+        let look = try JSONDecoder().decode(SavedLook.self, from: data)
+        XCTAssertEqual(look.budgetCents, 25000)
+        XCTAssertEqual(look.analysis.summary, "Saved look")
+    }
+
+    func testSavedLooksRetainUnlimitedAndCappedBudgets() throws {
+        let analysis = Analysis(summary: "Preview look", garments: garments([.top, .shoes]), limitations: "")
+        let original = [nil, 100, 25000, 1000000].map { cents in
+            SavedLook(id: UUID(), createdAt: Date(), analysis: analysis, budgetCents: cents)
+        }
+        let restored = try JSONDecoder().decode([SavedLook].self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(restored.map { $0.budgetCents }, original.map { $0.budgetCents })
+        XCTAssertEqual(restored.map { $0.id }, original.map { $0.id })
+        XCTAssertEqual(restored.first?.analysis, analysis)
+    }
 }

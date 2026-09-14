@@ -8,7 +8,10 @@ across the detected pieces. iOS 16+, Xcode 15+; no third-party iOS dependencies.
 
 - Photos picker, orientation-corrected 1600-pixel JPEG preparation without original metadata.
 - Live recognition client with consent, cancellation, connection testing, and visible errors.
-- Value ($100), Balanced ($250), Premium ($500), and Custom ($1-$10,000) total budgets.
+- Value ($100), Balanced ($250), Premium ($500), Custom ($1-$10,000), and No limit budgets.
+- No limit removes price language from shopping searches and hides per-piece allocations;
+  it does not verify exact matches, brands, prices, or stock. Saved looks retain this mode.
+- Dark editorial interface with condensed typography, restrained lime accents, and matching saved/settings screens.
 - Local, deterministic budget allocation. Changing tiers never calls Gemini again.
 - Style/occasion context passed to the vision prompt. Updating context requires a new analysis.
 - Shopping search links for each garment. These are NOT verified products, prices, or stock.
@@ -60,6 +63,10 @@ Photo preparation and local state: `FitFind/OutfitStore.swift`.
 Native screens: `ContentView.swift` and `SettingsView.swift`.
 
 ## Verification
+
+Open `ContentView.swift` and enable Editor > Canvas for a dark SwiftUI preview.
+Preview stores are isolated from saved looks on disk. Use the simulator for photo picking,
+recognition, and complete save/reopen/delete flows.
 
 GitHub Actions runs `swift test` and an unsigned iOS simulator build on macOS.
 Locally, with full Xcode selected:

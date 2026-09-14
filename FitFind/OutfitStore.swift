@@ -17,19 +17,25 @@ final class OutfitStore: ObservableObject {
     @Published var didSave = false
     private var photoRevision = UUID()
     private var recognitionTask: Task<Void, Never>?
+    private var recognitionRevision = UUID()
     private var lastContext = ""
-    private let saveURL: URL
+    private let saveURL: URL?
 
-    var budgetCents: Int? { tier.cents ?? Budget.parseDollars(customDollars) }
+    var budgetCents: Int? { tier.resolvedCents(customDollars: customDollars) }
+    var hasValidBudget: Bool { tier.isValid(customDollars: customDollars) }
+    var budgetTitle: String { tier == .unlimited ? "No limit" : budgetCents.map(usd) ?? "—" }
     var needsAnalysis: Bool { analysis == nil || context != lastContext }
 
-    init() {
+    init(preview: Bool = false) {
+        // Canvas previews never read or write the user's saved looks.
+        if preview { saveURL = nil; return }
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        saveURL = directory.appendingPathComponent("saved-looks.json")
+        let url = directory.appendingPathComponent("saved-looks.json")
+        saveURL = url
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: saveURL.path) {
-                saved = try JSONDecoder().decode([SavedLook].self, from: Data(contentsOf: saveURL))
+            if FileManager.default.fileExists(atPath: url.path) {
+                saved = try JSONDecoder().decode([SavedLook].self, from: Data(contentsOf: url))
             }
         } catch { self.error = "Saved looks could not be loaded. \(error.localizedDescription)" }
     }
@@ -65,30 +71,37 @@ final class OutfitStore: ObservableObject {
     }
 
     func analyze(endpoint: String) {
-        guard let data = photoData, budgetCents != nil, !isAnalyzing else { return }
+        guard let data = photoData, hasValidBudget, !isAnalyzing else { return }
         if !needsAnalysis { return }
         error = nil; isAnalyzing = true; didSave = false
         let revision = photoRevision
+        let recognition = UUID()
+        recognitionRevision = recognition
         let submittedContext = context
         recognitionTask = Task {
-            defer { if revision == photoRevision { isAnalyzing = false } }
+            defer { if recognition == recognitionRevision { isAnalyzing = false } }
             do {
                 let result = try await RecognitionClient(endpoint: endpoint, token: TokenStore.read())
                     .analyze(image: data, context: submittedContext)
-                guard !Task.isCancelled, revision == photoRevision else { return }
+                guard !Task.isCancelled, revision == photoRevision, recognition == recognitionRevision else { return }
                 analysis = result; lastContext = submittedContext
             } catch {
-                if !Task.isCancelled, revision == photoRevision { self.error = error.localizedDescription }
+                if !Task.isCancelled, revision == photoRevision, recognition == recognitionRevision {
+                    self.error = error.localizedDescription
+                }
             }
         }
     }
 
-    func cancelAnalysis() { recognitionTask?.cancel(); recognitionTask = nil; isAnalyzing = false }
+    func cancelAnalysis() {
+        recognitionRevision = UUID()
+        recognitionTask?.cancel(); recognitionTask = nil; isAnalyzing = false
+    }
 
     func saveLook() {
-        guard let result = analysis, let cents = budgetCents, !needsAnalysis else { return }
+        guard let result = analysis, hasValidBudget, !needsAnalysis else { return }
         var next = saved
-        next.insert(SavedLook(id: UUID(), createdAt: Date(), analysis: result, budgetCents: cents), at: 0)
+        next.insert(SavedLook(id: UUID(), createdAt: Date(), analysis: result, budgetCents: budgetCents), at: 0)
         next = Array(next.prefix(100))
         if persist(next) { didSave = true }
     }
@@ -101,7 +114,9 @@ final class OutfitStore: ObservableObject {
 
     @discardableResult private func persist(_ next: [SavedLook]) -> Bool {
         do {
-            try JSONEncoder().encode(next).write(to: saveURL, options: [.atomic, .completeFileProtection])
+            if let saveURL = saveURL {
+                try JSONEncoder().encode(next).write(to: saveURL, options: [.atomic, .completeFileProtection])
+            }
             saved = next
             return true
         } catch { self.error = "Could not save changes: \(error.localizedDescription)"; return false }

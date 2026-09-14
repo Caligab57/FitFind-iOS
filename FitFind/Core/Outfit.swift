@@ -1,16 +1,24 @@
 import Foundation
 
 enum BudgetTier: String, CaseIterable, Identifiable, Codable {
-    case value, balanced, premium, custom
+    case value, balanced, premium, custom, unlimited
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String { self == .unlimited ? "No limit" : rawValue.capitalized }
     var cents: Int? {
         switch self {
         case .value: return 10_000
         case .balanced: return 25_000
         case .premium: return 50_000
-        case .custom: return nil
+        case .custom, .unlimited: return nil
         }
+    }
+
+    func resolvedCents(customDollars: String) -> Int? {
+        self == .custom ? Budget.parseDollars(customDollars) : cents
+    }
+
+    func isValid(customDollars: String) -> Bool {
+        self == .unlimited || resolvedCents(customDollars: customDollars) != nil
     }
 }
 
@@ -47,11 +55,11 @@ struct Garment: Codable, Identifiable, Equatable {
     let details: String
     let searchQuery: String
 
-    func shoppingURL(budgetCents: Int) -> URL? {
+    func shoppingURL(budgetCents: Int?) -> URL? {
         var components = URLComponents(string: "https://www.google.com/search")
         components?.queryItems = [
             URLQueryItem(name: "tbm", value: "shop"),
-            URLQueryItem(name: "q", value: "\(searchQuery) under \(usd(budgetCents))")
+            URLQueryItem(name: "q", value: searchQuery + (budgetCents.map { " under \(usd($0))" } ?? ""))
         ]
         return components?.url
     }
@@ -117,5 +125,6 @@ struct SavedLook: Codable, Identifiable {
     let id: UUID
     let createdAt: Date
     let analysis: Analysis
-    let budgetCents: Int
+    // A missing cap means no limit. Existing saves with an integer still decode unchanged.
+    let budgetCents: Int?
 }
