@@ -1,0 +1,16 @@
+{
+  "name": "fitfind-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.mjs",
+    "dev": "node --env-file-if-exists=.env --watch src/index.mjs",
+    "health": "node --env-file-if-exists=.env scripts/client.mjs health",
+    "analyze": "node --env-file-if-exists=.env scripts/client.mjs analyze",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/index.mjs && node --check src/server.mjs && node --check src/gemini.mjs && node --check src/validation.mjs && node --check src/config.mjs && node --check scripts/client.mjs"
+  },
+  "dependencies": { "sharp": "0.34.5" }
+}

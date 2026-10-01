@@ -7,3 +7,9 @@ xcuserdata/
 *.env
 *.xcuserdatad/
 Config/Local.xcconfig
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+*.log

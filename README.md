@@ -4,6 +4,9 @@ Native SwiftUI personal-testing MVP: choose a real outfit photo, add style prefe
 recognize clothing with Gemini through a companion server, and divide a total USD budget
 across the detected pieces. iOS 16+, Xcode 15+; no third-party iOS dependencies.
 
+The recognition backend is included in [`backend/`](backend/README.md). It runs as a
+separate Node process on your Mac or server; it is not embedded in the iOS app.
+
 ## What works
 
 - Photos picker, orientation-corrected 1600-pixel JPEG preparation without original metadata.
@@ -33,9 +36,10 @@ and public distribution are not included in this MVP.
    change the bundle identifier if required, connect your phone, enable Developer Mode if
    prompted, choose the device, and Run. Free Personal Team provisioning expires after
    seven days and requires rebuilding/reinstalling.
-4. Clone/update [Caligab57/FitFind](https://github.com/Caligab57/FitFind) and follow
-   [vision-service/README.md](https://github.com/Caligab57/FitFind/blob/main/vision-service/README.md).
-   No web dependency installation is needed for that service.
+4. In this checkout, follow [backend/README.md](backend/README.md): install Node 22.13+,
+   run `cd backend && npm ci`, copy `.env.example` to `.env`, configure a Gemini key
+   and a separate random `FITFIND_ACCESS_TOKEN`, then run `npm start`. Keep secrets
+   in `backend/.env` on your Mac; the Gemini key must never enter the iOS app or Git.
 5. In the app's Settings, enter the service address and the matching `FITFIND_ACCESS_TOKEN`.
    The simulator default is `http://localhost:8787`. For an iPhone, use the Mac's Bonjour
    hostname such as `http://My-Mac.local:8787`, with both devices on the same trusted Wi-Fi.
@@ -49,7 +53,7 @@ multiuser login system. Do not publicly expose the personal-testing service.
 
 ## Architecture
 
-`iPhone -> FitFind companion server -> Gemini Interactions API`
+`iPhone -> backend/ Node service -> Gemini Interactions API`
 
 The server prompts Gemini to describe only visible garments and return validated JSON.
 The prompt supplies FitFind's purpose and rules; the user supplies style context. Garment
@@ -61,6 +65,7 @@ Core models and budget arithmetic: `FitFind/Core/Outfit.swift`.
 Transport and Keychain: `FitFind/RecognitionClient.swift`.
 Photo preparation and local state: `FitFind/OutfitStore.swift`.
 Native screens: `ContentView.swift` and `SettingsView.swift`.
+Recognition server, image validation, Gemini integration, and offline tests: `backend/`.
 
 ## Verification
 
@@ -68,8 +73,18 @@ Open `ContentView.swift` and enable Editor > Canvas for a dark SwiftUI preview.
 Preview stores are isolated from saved looks on disk. Use the simulator for photo picking,
 recognition, and complete save/reopen/delete flows.
 
-GitHub Actions runs `swift test` and an unsigned iOS simulator build on macOS.
-Locally, with full Xcode selected:
+GitHub Actions runs backend checks on Node 22, plus `swift test` and an unsigned iOS simulator build on macOS.
+Run backend checks without a Gemini key:
+
+```sh
+cd backend
+npm ci
+npm run check
+npm test
+```
+
+Backend tests use synthetic images and mock the provider; they make no billable calls.
+From the repository root, with full Xcode selected:
 
 ```sh
 swift test
@@ -90,7 +105,7 @@ and never automatically retries a paid call. The client reuses recognition for b
 Before public use, add authenticated per-user metering in durable storage, enforce quotas
 before provider calls, add a global spending circuit breaker, and set prices from observed
 vision + product-search cost per successful outfit. Provider billing alerts alone are not a
-hard application spending cap. See the backend's scaling notes.
+hard application spending cap. See [backend safeguards](backend/README.md#architecture-and-safeguards).
 
 Sources: [Gemini image understanding](https://ai.google.dev/gemini-api/docs/image-understanding),
 [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output),
