@@ -1,11 +1,12 @@
 import {readFile, stat} from 'node:fs/promises';
 import {loadConfig} from '../src/config.mjs';
+import {validateShoppingRequest} from '../src/shopping.mjs';
 
-// Manual smoke test only: `analyze` can make one billable provider request.
+// Manual smoke tests only: analyze/products can make billable provider calls.
 try {
   const config=loadConfig();
   const mode=process.argv[2];
-  if(!['health','analyze'].includes(mode)) throw Error('Use npm run health or npm run analyze -- /absolute/path/photo.jpg');
+  if(!['health','analyze','products'].includes(mode)) throw Error('Use npm run health, analyze -- photo.jpg, or products -- analysis.json 25000 (or unlimited).');
   const base=process.env.FITFIND_SERVICE_URL || `http://127.0.0.1:${config.port}`;
   const origin=new URL(base);
   if(!['http:','https:'].includes(origin.protocol) || !['','/'].includes(origin.pathname) || origin.search || origin.hash || origin.username || origin.password) throw Error('FITFIND_SERVICE_URL must be an HTTP(S) origin without credentials, query or path.');
@@ -18,7 +19,18 @@ try {
     headers['Content-Type']='application/json';
     body=JSON.stringify({imageBase64:(await readFile(file)).toString('base64'),context:process.argv[4] || ''});
   }
-  const response=await fetch(new URL(mode==='health'?'/health':'/analyze',origin),{method:mode==='health'?'GET':'POST',headers,body,signal:AbortSignal.timeout(55_000),redirect:'error'});
+  if(mode==='products') {
+    const file=process.argv[3], cap=process.argv[4];
+    if(!file || !cap) throw Error('Supply an analysis JSON file and budget cents, or unlimited.');
+    if((await stat(file)).size>64_000) throw Error('Use an analysis file smaller than 64 KB.');
+    const budgetCents=cap==='unlimited'?null:(/^\d+$/.test(cap)?Number(cap):NaN);
+    let analysis;
+    try {analysis=JSON.parse(await readFile(file,'utf8'));}
+    catch {throw Error('The analysis file must contain the direct JSON response from /analyze.');}
+    const input=validateShoppingRequest({analysis,budgetCents,currency:'USD'});
+    headers['Content-Type']='application/json';body=JSON.stringify(input);
+  }
+  const response=await fetch(new URL(mode==='health'?'/health':mode==='products'?'/products':'/analyze',origin),{method:mode==='health'?'GET':'POST',headers,body,signal:AbortSignal.timeout(55_000),redirect:'error'});
   const value=await response.json();
   if(!response.ok) throw Error(`HTTP ${response.status}: ${value.error || 'Request failed.'}`);
   console.log(JSON.stringify(value,null,2));
