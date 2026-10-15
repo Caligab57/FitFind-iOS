@@ -10,9 +10,15 @@ final class OutfitStore: ObservableObject {
     @Published var isLoadingPhoto = false
     @Published var isAnalyzing = false
     @Published var error: String?
-    @Published var context = ""
-    @Published var tier: BudgetTier = .balanced
-    @Published var customDollars = "250"
+    @Published var context = "" {
+        didSet {
+            guard context != oldValue else { return }
+            cancelAnalysis()
+            didSave = false
+        }
+    }
+    @Published var tier: BudgetTier = .balanced { didSet { didSave = false } }
+    @Published var customDollars = "250" { didSet { didSave = false } }
     @Published var saved: [SavedLook] = []
     @Published var didSave = false
     private var photoRevision = UUID()
@@ -44,7 +50,7 @@ final class OutfitStore: ObservableObject {
         cancelAnalysis()
         let revision = UUID()
         photoRevision = revision
-        analysis = nil; photo = nil; photoData = nil; error = nil; didSave = false
+        analysis = nil; photo = nil; photoData = nil; error = nil; didSave = false; isLoadingPhoto = false
         guard let item = item else { return }
         isLoadingPhoto = true
         defer { if revision == photoRevision { isLoadingPhoto = false } }
@@ -83,7 +89,7 @@ final class OutfitStore: ObservableObject {
             do {
                 let result = try await RecognitionClient(endpoint: endpoint, token: TokenStore.read())
                     .analyze(image: data, context: submittedContext)
-                guard !Task.isCancelled, revision == photoRevision, recognition == recognitionRevision else { return }
+                guard !Task.isCancelled, revision == photoRevision, recognition == recognitionRevision, context == submittedContext else { return }
                 analysis = result; lastContext = submittedContext
             } catch {
                 if !Task.isCancelled, revision == photoRevision, recognition == recognitionRevision {
@@ -120,5 +126,59 @@ final class OutfitStore: ObservableObject {
             saved = next
             return true
         } catch { self.error = "Could not save changes: \(error.localizedDescription)"; return false }
+    }
+}
+
+
+// Each results screen owns a search session; saved looks cannot replace Discover's listings.
+@MainActor
+final class ProductSearchStore: ObservableObject {
+    @Published private(set) var result: ProductSearchResponse?
+    @Published private(set) var isSearching = false
+    @Published private(set) var error: String?
+    private var searchedAnalysis: Analysis?
+    private var searchedBudget: Int?
+    private var task: Task<Void, Never>?
+    private var revision = UUID()
+
+    func response(for analysis: Analysis, budgetCents: Int?) -> ProductSearchResponse? {
+        guard analysis == searchedAnalysis, budgetCents == searchedBudget else { return nil }
+        return result
+    }
+
+    func search(analysis: Analysis, budgetCents: Int?, endpoint: String) {
+        invalidate()
+        guard !analysis.garments.isEmpty else { return }
+        let requestRevision = revision
+        searchedAnalysis = analysis
+        searchedBudget = budgetCents
+        isSearching = true
+        task = Task {
+            defer { if revision == requestRevision { isSearching = false; task = nil } }
+            do {
+                let response = try await RecognitionClient(endpoint: endpoint, token: TokenStore.read())
+                    .findProducts(analysis: analysis, budgetCents: budgetCents)
+                guard !Task.isCancelled, revision == requestRevision else { return }
+                result = response
+            } catch {
+                guard !Task.isCancelled, revision == requestRevision else { return }
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func cancel() {
+        revision = UUID()
+        task?.cancel()
+        task = nil
+        isSearching = false
+    }
+
+    func invalidate() {
+        cancel()
+        result = nil
+        error = nil
+        searchedAnalysis = nil
+        searchedBudget = nil
     }
 }

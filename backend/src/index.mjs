@@ -6,7 +6,8 @@ try {
   const server=createService(config);
   server.on('error',()=>{console.error('Could not start the service. Check HOST and PORT.');process.exitCode=1;});
   server.listen(config.port,config.host,()=>{
-    console.log(JSON.stringify({event:'listening',host:config.host,port:config.port,ready:!!config.apiKey}));
+    console.log(JSON.stringify({event:'listening',host:config.host,port:config.port,
+      recognitionConfigured:!!config.apiKey,shoppingConfigured:!!config.shoppingApiKey,liveVerified:false}));
   });
   let closing=false;
   function shutdown() {

@@ -28,6 +28,8 @@ const providerReply=(value=analysis,extra={})=>({status:'completed',steps:[{type
 test('configuration fails closed without a strong access token',()=>{
   for(const invalid of [undefined,'short',' '.repeat(40)]) assert.throws(()=>loadConfig({FITFIND_ACCESS_TOKEN:invalid}),/FITFIND_ACCESS_TOKEN/);
   assert.equal(loadConfig({FITFIND_ACCESS_TOKEN:token}).apiKey,'');
+  assert.equal(loadConfig({FITFIND_ACCESS_TOKEN:token}).model,'gemini-3.8-flash');
+  assert.equal(loadConfig({FITFIND_ACCESS_TOKEN:token,GEMINI_MODEL:'gemini-2.5-flash'}).model,'gemini-2.5-flash');
   assert.throws(()=>loadConfig({FITFIND_ACCESS_TOKEN:token,PORT:'abc'}),/PORT/);
   assert.throws(()=>loadConfig({FITFIND_ACCESS_TOKEN:token,GEMINI_MODEL:'https://evil.test'}),/GEMINI_MODEL/);
 });
@@ -128,7 +130,7 @@ test('Gemini REST request is stateless, structured and uses JPEG input',async()=
   assert.equal(sent.url,'https://generativelanguage.googleapis.com/v1beta/interactions');
   assert.equal(sent.redirect,'error');
   assert.equal(sent.headers['x-goog-api-key'],'dummy-test-key');
-  const body=JSON.parse(sent.body);assert.equal(body.store,false);assert.equal(body.stream,false);
+  const body=JSON.parse(sent.body);assert.equal(body.model,'gemini-3.8-flash');assert.equal(body.store,false);assert.equal(body.stream,false);
   assert.equal(body.response_format.mime_type,'application/json');assert.equal(body.input[1].mime_type,'image/jpeg');
   assert.match(body.system_instruction,/untrusted/);assert.equal(body.response_format.schema.properties.garments.maxItems,12);
 });

@@ -61,9 +61,17 @@ struct RecognitionClient {
     func checkConnection() async throws -> String {
         let request = try request(path: "health")
         let data = try await send(request)
-        struct Health: Decodable { let ready: Bool }
+        struct Health: Decodable {
+            let ready: Bool
+            let recognitionConfigured: Bool?
+            let shoppingConfigured: Bool?
+        }
         let health = try JSONDecoder().decode(Health.self, from: data)
-        return health.ready ? "Connected. Recognition is ready." : "Connected. Add GEMINI_API_KEY on your Mac to enable recognition."
+        let recognition = health.recognitionConfigured ?? health.ready
+        let shopping = health.shoppingConfigured ?? false
+        return "Connected. Recognition: \(recognition ? "configured" : "add GEMINI_API_KEY on your server"). " +
+            "Product search: \(shopping ? "configured" : "add SERPAPI_API_KEY on your server"). " +
+            "Configuration checked only; live results have not been verified."
     }
 
     func analyze(image: Data, context: String) async throws -> Analysis {
@@ -77,18 +85,61 @@ struct RecognitionClient {
         catch { throw AnalysisError.invalidResponse }
     }
 
+    func findProducts(analysis: Analysis, budgetCents: Int?) async throws -> ProductSearchResponse {
+        _ = try analysis.validated()
+        guard !analysis.garments.isEmpty,
+              budgetCents.map({ (100...1_000_000).contains($0) }) ?? true else {
+            throw ConnectionError.message("Choose a valid budget and analyze an outfit before searching.")
+        }
+        var request = try request(path: "products")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 55
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        struct Payload: Encodable {
+            let analysis: Analysis
+            let budgetCents: Int?
+            enum CodingKeys: String, CodingKey { case analysis, budgetCents, currency }
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(analysis, forKey: .analysis)
+                try container.encode(budgetCents, forKey: .budgetCents)
+                try container.encode("USD", forKey: .currency)
+            }
+        }
+        request.httpBody = try JSONEncoder().encode(Payload(analysis: analysis, budgetCents: budgetCents))
+        let data = try await send(request)
+        do {
+            return try JSONDecoder().decode(ProductSearchResponse.self, from: data)
+                .validated(for: analysis, budgetCents: budgetCents)
+        } catch { throw ProductSearchError.invalidResponse }
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
-        let session = URLSession(configuration: configuration)
+        let session = URLSession(configuration: configuration, delegate: RejectServiceRedirects(), delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw AnalysisError.invalidResponse }
+        guard !(300...399).contains(http.statusCode) else {
+            throw ConnectionError.message("The service tried to redirect the request. The redirect was blocked; enter the service's direct address in Settings.")
+        }
         guard (200...299).contains(http.statusCode) else {
             struct Failure: Decodable { let error: String }
             let failure = try? JSONDecoder().decode(Failure.self, from: data)
-            throw ConnectionError.message(failure?.error ?? "The recognition service could not complete the request.")
+            throw ConnectionError.message(failure?.error ?? "The FitFind service could not complete the request.")
         }
         return data
+    }
+}
+
+
+// Redirects are unnecessary for this API and must never forward photos or access tokens.
+private final class RejectServiceRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

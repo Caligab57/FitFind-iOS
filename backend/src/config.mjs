@@ -11,15 +11,20 @@ export function loadConfig(env = process.env) {
     }
     return value;
   }
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = env.GEMINI_MODEL || 'gemini-3.8-flash';
   if (!/^gemini-[a-zA-Z0-9._-]{1,80}$/.test(model)) throw new Error('Invalid GEMINI_MODEL.');
   return {
     token, model, apiKey: (env.GEMINI_API_KEY ?? '').trim(),
+    shoppingApiKey: (env.SERPAPI_API_KEY ?? '').trim(),
     host: env.HOST || '127.0.0.1', port: integer('PORT', 8787, 1, 65535),
     maxRequests: integer('MAX_REQUESTS_PER_MINUTE', 20, 1, 1000),
     maxConcurrent: integer('MAX_CONCURRENT_ANALYSES', 2, 1, 8),
     maxCalls: integer('MAX_PROVIDER_CALLS_PER_RUN', 50, 1, 10000),
+    maxShoppingCalls: integer('MAX_SHOPPING_CALLS_PER_RUN', 50, 1, 10000),
+    shoppingDetailsPerGarment: integer('SHOPPING_DETAILS_PER_GARMENT', 2, 1, 3),
     cacheTtlMs: integer('CACHE_TTL_SECONDS', 300, 0, 3600) * 1000,
+    shoppingCacheTtlMs: integer('SHOPPING_CACHE_TTL_SECONDS', 300, 0, 900) * 1000,
+    shoppingTimeoutMs: 45_000, shoppingProviderTimeoutMs: 12_000,
     maxBodyBytes: 4_100_000, maxImageBytes: 3_000_000,
     providerTimeoutMs: 45_000, maxOutputTokens: 4096,
   };

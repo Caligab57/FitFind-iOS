@@ -93,8 +93,7 @@ struct ContentView: View {
                     consent = false
                     Task { await store.load(item) }
                 }
-                .onChange(of: store.tier) { _ in store.didSave = false }
-                .onChange(of: store.customDollars) { _ in store.didSave = false }
+                .onChange(of: endpoint) { _ in consent = false }
             }
             .tabItem { Label("Discover", systemImage: "viewfinder") }
             SavedLooksView().tabItem { Label("Saved", systemImage: "bookmark") }
@@ -313,7 +312,7 @@ struct ContentView: View {
                     Text("Preferences changed. Update the analysis to apply them.")
                         .font(.footnote).foregroundStyle(FitStyle.muted)
                 }
-                OutfitResults(analysis: analysis, budgetCents: store.budgetCents)
+                OutfitResults(analysis: analysis, budgetCents: store.budgetCents, allowsProductSearch: store.hasValidBudget && !store.needsAnalysis && !store.isAnalyzing)
                 if !analysis.garments.isEmpty {
                     Button { store.saveLook() } label: {
                         Label(store.didSave ? "Look saved" : "Save this look", systemImage: store.didSave ? "checkmark" : "bookmark")
@@ -328,6 +327,16 @@ struct ContentView: View {
 struct OutfitResults: View {
     let analysis: Analysis
     let budgetCents: Int?
+    var allowsProductSearch = true
+    @AppStorage("serviceURL") private var endpoint = "http://localhost:8787"
+    @AppStorage("productSearchConsent") private var productConsent = false
+    @StateObject private var search = ProductSearchStore()
+    @State private var confirmProductSearch = false
+
+    private var response: ProductSearchResponse? {
+        guard allowsProductSearch else { return nil }
+        return search.response(for: analysis, budgetCents: budgetCents)
+    }
 
     var body: some View {
         let allocations = budgetCents.map { Budget.allocate($0, garments: analysis.garments) } ?? []
@@ -343,19 +352,112 @@ struct OutfitResults: View {
                 Label("No clothing was clearly visible. Try another photo.", systemImage: "photo")
                     .foregroundStyle(FitStyle.muted)
             } else {
+                if allowsProductSearch { productSearchControls }
+                if let response = response { searchSummary(response) }
                 ForEach(Array(analysis.garments.enumerated()), id: \.element.id) { index, garment in
                     garmentCard(garment, number: index + 1,
                                 target: allocations.indices.contains(index) ? allocations[index] : nil)
                 }
-                Text(budgetCents == nil
-                     ? "Searches have no price cap. Exact items, brands, availability, and prices are unverified."
-                     : "Targets are budget allocations, not product prices. Search results may cost more; matches and availability are unverified.")
+                Text("Targets divide your total budget; they aren't prices. Manual searches may exceed them. Product candidates use listing text only: visual similarity, exact identity, stock, and final prices are unverified. Tax and shipping are extra. Check the merchant before buying.")
                     .font(.caption).foregroundStyle(FitStyle.muted)
             }
             if !analysis.limitations.isEmpty {
                 Label(analysis.limitations, systemImage: "info.circle").font(.footnote).foregroundStyle(FitStyle.muted)
             }
         }
+        .confirmationDialog("Find product alternatives?", isPresented: $confirmProductSearch, titleVisibility: .visible) {
+            Button("Send descriptions and search") {
+                productConsent = true
+                startSearch()
+            }
+        } message: {
+            Text("Your garment search descriptions will be sent through your server to SerpApi, a third-party Google Shopping search provider. Your photo and original preferences aren't sent to SerpApi. This permission is remembered for future searches; you can turn it off in Settings.")
+        }
+        .onChange(of: analysis) { _ in invalidateSearch() }
+        .onChange(of: budgetCents) { _ in invalidateSearch() }
+        .onChange(of: allowsProductSearch) { _ in invalidateSearch() }
+        .onChange(of: endpoint) { _ in invalidateSearch() }
+        .onChange(of: productConsent) { allowed in if !allowed { invalidateSearch() } }
+        .onDisappear { search.cancel(); confirmProductSearch = false }
+    }
+
+    private var productSearchControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if search.isSearching {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Finding priced alternatives…").font(.subheadline)
+                    Spacer()
+                    Button("Cancel", role: .cancel) { search.cancel() }.frame(minHeight: 44)
+                }
+                .padding(16).background(FitStyle.surface, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("productSearchLoading")
+            } else {
+                Button {
+                    if productConsent { startSearch() } else { confirmProductSearch = true }
+                } label: {
+                    Label(searchButtonTitle, systemImage: response == nil ? "magnifyingglass" : "arrow.clockwise")
+                }
+                .buttonStyle(FitActionStyle(prominent: true))
+                .accessibilityIdentifier("findProductAlternatives")
+            }
+            if let error = search.error {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.footnote).foregroundStyle(.red).accessibilityIdentifier("productSearchError")
+            }
+            Text("Searches use these garment descriptions. Changing your budget clears listings so you can search again without analyzing the photo again.")
+                .font(.caption).foregroundStyle(FitStyle.muted)
+        }
+    }
+
+    private var searchButtonTitle: String {
+        if search.error != nil { return "Try product search again" }
+        if response != nil { return "Search again" }
+        return budgetCents == nil ? "Find similar styles" : "Find budget alternatives"
+    }
+
+    private func startSearch() {
+        guard productConsent, allowsProductSearch else { return }
+        search.search(analysis: analysis, budgetCents: budgetCents, endpoint: endpoint)
+    }
+
+    private func invalidateSearch() {
+        search.invalidate()
+        confirmProductSearch = false
+    }
+
+    private func searchSummary(_ response: ProductSearchResponse) -> some View {
+        let matched = response.garments.filter { !$0.products.isEmpty }.count
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(response.outfit.complete ? "ALTERNATIVES FOR EVERY PIECE" : "\(matched) OF \(analysis.garments.count) PIECES FOUND")
+                .font(FitStyle.caption()).tracking(1).foregroundStyle(FitStyle.accent)
+            if matched > 0 {
+                Text("Selected subtotal \(usd(response.outfit.subtotalCents))")
+                    .font(.title3.weight(.semibold)).monospacedDigit()
+                Text("First candidate per matched piece. Tax and shipping excluded.")
+                    .font(.caption).foregroundStyle(FitStyle.muted)
+            } else {
+                Text("No priced alternatives found. Try a different budget or search manually.")
+                    .font(.subheadline).foregroundStyle(FitStyle.muted)
+            }
+            if !response.outfit.complete, matched > 0 {
+                Text("This is a partial outfit. Missing pieces aren't included in the subtotal.")
+                    .font(.caption).foregroundStyle(FitStyle.muted)
+            }
+            if let omitted = response.excludedCurrencyCount, omitted > 0 {
+                Text("\(omitted) listings omitted because their currency could not be confirmed as USD.")
+                    .font(.caption).foregroundStyle(FitStyle.muted)
+            }
+            if let date = response.searchedDate {
+                Text("Searched \(date.formatted(date: .abbreviated, time: .shortened)) · USD listings")
+                    .font(.caption2).foregroundStyle(FitStyle.muted)
+            }
+            if !response.limitations.isEmpty {
+                Text(response.limitations).font(.caption).foregroundStyle(FitStyle.muted)
+            }
+        }
+        .padding(16).background(FitStyle.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("productSearchSummary")
     }
 
     private func garmentCard(_ garment: Garment, number: Int, target: Int?) -> some View {
@@ -376,6 +478,16 @@ struct OutfitResults: View {
                 HStack { targetLabel(target); Spacer(minLength: 12); shoppingLink(garment, target: target) }
                 VStack(alignment: .leading, spacing: 8) { targetLabel(target); shoppingLink(garment, target: target) }
             }
+            if let response = response {
+                let products = response.products(for: garment.id)
+                if products.isEmpty {
+                    Label(target == nil ? "No priced candidates found for this piece." : "No priced candidates found within this piece's target.", systemImage: "magnifyingglass")
+                        .font(.footnote).foregroundStyle(FitStyle.muted)
+                }
+                ForEach(products) { product in
+                    ProductListingCard(product: product, isSelected: response.outfit.selectedProductIds.contains(product.id))
+                }
+            }
         }
         .padding(18).background(FitStyle.surface, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(FitStyle.line))
@@ -389,10 +501,53 @@ struct OutfitResults: View {
     @ViewBuilder private func shoppingLink(_ garment: Garment, target: Int?) -> some View {
         if let url = garment.shoppingURL(budgetCents: target) {
             Link(destination: url) {
-                Label("Search piece", systemImage: "arrow.up.right")
+                Label("Search manually", systemImage: "arrow.up.right")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(FitStyle.accent).frame(minHeight: 44)
-            }.accessibilityLabel("Search shopping for \(garment.name)")
+            }.accessibilityLabel("Search Google Shopping manually for \(garment.name)")
         }
+    }
+}
+
+private struct ProductListingCard: View {
+    let product: ProductListing
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                if let thumbnail = product.thumbnail {
+                    AsyncImage(url: thumbnail) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        Image(systemName: "photo").foregroundStyle(FitStyle.muted)
+                    }
+                    .frame(width: 64, height: 80)
+                    .background(FitStyle.surface, in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(product.title).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(product.merchant).font(.caption).foregroundStyle(FitStyle.muted)
+                    Text(usd(product.priceCents)).font(.headline).monospacedDigit().foregroundStyle(FitStyle.accent)
+                }
+                Spacer(minLength: 0)
+            }
+            Text("Similar style candidate · identity unverified")
+                .font(.caption2.weight(.medium)).foregroundStyle(FitStyle.muted)
+            Text(product.matchReason).font(.caption).foregroundStyle(FitStyle.muted)
+            if isSelected {
+                Label("Included in selected subtotal", systemImage: "checkmark.circle")
+                    .font(.caption).foregroundStyle(FitStyle.accent)
+            }
+            if let destination = product.destination {
+                Link(destination: destination) {
+                    Label("View listing", systemImage: "arrow.up.right")
+                        .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .accessibilityLabel("View \(product.title) at \(product.merchant), \(usd(product.priceCents))")
+            }
+        }
+        .padding(14).background(FitStyle.raised, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

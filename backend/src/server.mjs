@@ -2,22 +2,28 @@ import http from 'node:http';
 import {createHash, randomUUID, timingSafeEqual} from 'node:crypto';
 import {prepareImage, ServiceError, validateAnalysis, validateRequest} from './validation.mjs';
 import {createGeminiProvider, PROMPT_VERSION} from './gemini.mjs';
+import {searchOutfit, SHOPPING_VERSION, validateShoppingRequest} from './shopping.mjs';
+import {createSerpApiProvider} from './serpapi.mjs';
 
 async function readBody(req, limit) {
-  if (Number(req.headers['content-length']) > limit) throw new ServiceError(413, 'Request exceeds 4.1 MB.');
+  if (Number(req.headers['content-length']) > limit) throw new ServiceError(413, 'Request exceeds the allowed body size.');
   const chunks=[]; let size=0;
   for await (const chunk of req.iterator({destroyOnReturn:false})) {
     size+=chunk.length;
-    if(size>limit) throw new ServiceError(413, 'Request exceeds 4.1 MB.');
+    if(size>limit) throw new ServiceError(413, 'Request exceeds the allowed body size.');
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
   catch { throw new ServiceError(400, 'Request body must be valid JSON.'); }
 }
 
-export function createService(config, {provider = createGeminiProvider(config), logger = event => console.log(JSON.stringify(event)), now = Date.now} = {}) {
-  let active=0, calls=0, windowStart=now(), requests=0;
-  const cache = new Map();
+export function createService(config, {provider = createGeminiProvider(config), shoppingProvider, shoppingFetch, logger = event => console.log(JSON.stringify(event)), now = Date.now} = {}) {
+  let active=0, calls=0, shoppingCalls=0, windowStart=now(), requests=0;
+  const cache = new Map(), shoppingCache = new Map();
+  const productsProvider = shoppingProvider ?? createSerpApiProvider(config,{fetchImpl:shoppingFetch,reserveCall:()=>{
+    if(shoppingCalls>=config.maxShoppingCalls) throw new ServiceError(503,'The configured per-run shopping call limit has been reached.');
+    shoppingCalls++;
+  }});
   const expected = Buffer.from(`Bearer ${config.token}`);
   const server = http.createServer(async (req,res) => {
     const started=now(), requestId=randomUUID(), controller=new AbortController();
@@ -36,16 +42,39 @@ export function createService(config, {provider = createGeminiProvider(config), 
       if(supplied.length!==expected.length || !timingSafeEqual(supplied,expected)) throw new ServiceError(401,'A valid service access token is required.');
       if(req.method==='GET' && req.url==='/health') {
         // Configuration readiness only; health never makes a paid provider call.
-        send(200,{ready:!!config.apiKey,service:'fitfind-backend',version:'0.1.0'}); return;
+        send(200,{ready:!!config.apiKey,recognitionConfigured:!!config.apiKey,
+          shoppingConfigured:!!config.shoppingApiKey,liveVerified:false,
+          service:'fitfind-backend',version:'0.2.0'}); return;
       }
-      if(req.url!=='/analyze') throw new ServiceError(404,'Route not found.');
-      if(req.method!=='POST') {res.setHeader('Allow','POST');throw new ServiceError(405,'Use POST /analyze.');}
+      if(!['/analyze','/products'].includes(req.url)) throw new ServiceError(404,'Route not found.');
+      if(req.method!=='POST') {res.setHeader('Allow','POST');throw new ServiceError(405,`Use POST ${req.url}.`);}
       if(now()-windowStart>=60000) {windowStart=now();requests=0;}
-      if(++requests>config.maxRequests) throw new ServiceError(429,'Too many analysis requests. Wait a minute.');
-      if(active>=config.maxConcurrent) throw new ServiceError(429,'Analysis is busy. Try again shortly.');
+      if(++requests>config.maxRequests) throw new ServiceError(429,'Too many requests. Wait a minute.');
+      if(active>=config.maxConcurrent) throw new ServiceError(429,'The service is busy. Try again shortly.');
       active++; held=true;
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) throw new ServiceError(415,'Send application/json.');
       if(req.headers['content-encoding'] && req.headers['content-encoding']!=='identity') throw new ServiceError(415,'Compressed request bodies are not supported.');
+      if(req.url==='/products') {
+        const input=validateShoppingRequest(await readBody(req,64_000));
+        if(!config.shoppingApiKey) throw new ServiceError(503,'Add SERPAPI_API_KEY to the backend environment to enable product search.');
+        const key=createHash('sha256').update(SHOPPING_VERSION).update(JSON.stringify(input)).digest('hex');
+        for(const [k,v] of shoppingCache) if(v.expires<=now()) shoppingCache.delete(k);
+        const cached=shoppingCache.get(key);
+        if(cached) {cacheHit=true;send(200,cached.result);return;}
+        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(config.shoppingTimeoutMs)]);
+        let output;
+        try {output=await searchOutfit(input,{provider:productsProvider,signal,now});}
+        catch(error) {
+          if(controller.signal.aborted) throw new ServiceError(499,'Request cancelled.');
+          if(signal.aborted) throw new ServiceError(504,'Product search timed out. No automatic retry was made.');
+          throw error;
+        }
+        if(config.shoppingCacheTtlMs>0 && !signal.aborted && !output.partial) {
+          if(shoppingCache.size>=100) shoppingCache.delete(shoppingCache.keys().next().value);
+          shoppingCache.set(key,{result:output.result,expires:now()+config.shoppingCacheTtlMs});
+        }
+        send(200,output.result);return;
+      }
       const {bytes,context}=validateRequest(await readBody(req,config.maxBodyBytes),config.maxImageBytes);
       if(!config.apiKey) throw new ServiceError(503,'Add GEMINI_API_KEY to the backend environment to enable recognition.');
       const image=await prepareImage(bytes);
@@ -70,7 +99,7 @@ export function createService(config, {provider = createGeminiProvider(config), 
     } finally {
       if(held) active--;
       // Never log photos, prompts, context, tokens, provider body, or raw errors.
-      try {logger({event:'request',requestId,status,durationMs:now()-started,cacheHit,providerCalls:calls,
+      try {logger({event:'request',requestId,status,durationMs:now()-started,cacheHit,providerCalls:calls,shoppingCalls,
         ...(usage?{usage}: {})});} catch {/* Logging must not interrupt request handling. */}
       // Rejected unread bodies are drained without buffering; the response closes that connection.
       if(!req.readableEnded) {req.resume();}
