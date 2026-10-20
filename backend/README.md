@@ -55,6 +55,42 @@ For the phone, replace `Your-Mac.local` with your actual LocalHostName from **Sy
 
 Use the same `FITFIND_ACCESS_TOKEN` in the app's service-token field. **Never put the Gemini API key into the app.** Budget changes do not require another recognition call. They invalidate the old shopping result and allow a new product search. Saved looks store descriptions and budget, not stale product prices; searching a saved look performs a fresh lookup. Product-search consent is separate from photo-analysis consent and can be revoked in Settings.
 
+## Test remotely over cellular
+
+For your own remote testing, use a Cloudflare Quick Tunnel. It creates an outbound
+connection from the Mac, so you do not need to open a router port or set `HOST=0.0.0.0`.
+
+Install the tunnel client once:
+
+```sh
+brew install cloudflared
+```
+
+In Terminal 1, keep the backend running and prevent idle sleep:
+
+```sh
+cd backend
+caffeinate -i npm start
+```
+
+In Terminal 2, from any folder, start the tunnel:
+
+```sh
+cloudflared tunnel --url http://127.0.0.1:8787
+```
+
+Copy the printed `https://...trycloudflare.com` URL into the iOS app's Settings as the
+Recognition service address. Enter the same `FITFIND_ACCESS_TOKEN` from `backend/.env`,
+tap **Test connection**, and save. Turn Wi-Fi off on the iPhone and analyze a photo over
+cellular. Both Terminal processes must remain running and the Mac must stay online.
+
+The temporary URL changes each time `cloudflared` restarts. Anyone who learns the URL can
+reach the service, but every route still requires the long bearer token. Keep both values
+private. Quick Tunnels are intended for development and have no uptime guarantee. Do not
+enable Cloudflare's email login for this native client; it cannot complete that browser-based
+flow. For a stable multi-tester URL, use a named tunnel plus machine-to-machine access tokens
+and add server-side validation for those credentials before inviting other users.
+
 ## API contract
 
 All routes require `Authorization: Bearer <FITFIND_ACCESS_TOKEN>`.
