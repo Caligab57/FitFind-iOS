@@ -65,6 +65,11 @@ as within budget. This integration has offline fixtures, not live provider-quali
    photo for recognition; SerpApi receives only the garment search description for shopping.
    Changing a budget clears stale products and lets you search again without another Gemini call.
 
+To test away from the Mac's Wi-Fi, follow the backend README's **Test remotely over cellular**
+section. Start a Cloudflare Quick Tunnel, then enter its temporary
+`https://...trycloudflare.com` URL in the app Settings. Keep the Mac, recognition service,
+and tunnel running. The URL changes whenever the tunnel restarts.
+
 Use HTTPS for any nonlocal service. The app permits HTTP only for localhost and `.local`
 hosts, with a narrow local-network transport exception. The development token is NOT a
 multiuser login system. Do not publicly expose the personal-testing service.
